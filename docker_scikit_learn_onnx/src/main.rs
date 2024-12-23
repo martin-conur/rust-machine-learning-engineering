@@ -1,29 +1,120 @@
-use ort::session;
+use axum::{
+    extract::State, 
+    http::StatusCode, 
+    response::{IntoResponse, Response}, 
+    routing::post, 
+    Json, 
+    Router
+};
 use ndarray::Array2;
+use ort::session::Session;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create session
-    let session = session::Session::builder()?
-        .with_optimization_level(session::builder::GraphOptimizationLevel::Level3)?
+#[derive(Deserialize)]
+struct PredictionRequest {
+    features: Vec<Vec<f32>>
+}
+
+#[derive(Serialize)]
+struct PredctionResponse {
+    predictions: Vec<f32>
+}
+
+enum ModelError {
+    PredictionError(String),
+    InputError(String),
+    OrtError(ort::Error)
+}
+
+impl From<ort::Error> for ModelError {
+    fn from(error: ort::Error) -> Self {
+        ModelError::OrtError(error)
+    }
+}
+
+impl IntoResponse for ModelError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            ModelError::PredictionError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            ModelError::InputError(msg) => (StatusCode::BAD_REQUEST, msg),
+            ModelError::OrtError(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        };
+
+        (status, Json(serde_json::json!({"error": message}))).into_response()
+    }
+}
+
+// ONNX
+struct AppState {
+    session: Session,
+    input_name: String
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt::init();
+
+    let session = Session::builder()?
+        .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)?
         .with_intra_threads(4)?
         .commit_from_file("toy_model_generation/rf_model.onnx")?;
 
-    // Create input data - adjust dimensions to match your 4 features
-    let input_array: Array2<f32> = Array2::from_shape_vec(
-        (2, 4), // 2 samples, 4 features
-        vec![1.2, 0.5, 3.4, 2.0, 2.3, 1.1, 4.1, 1.5] // Example values
-    )?;
-
-    // Get input name from model
     let input_name = session.inputs[0].name.clone();
-    
-    // Run inference
-    let outputs =     session.run(ort::inputs![input_name => input_array]?)?;
 
+    let state = Arc::new(
+        AppState {
+            session,
+            input_name
+        }
+    );
 
-    // Get the first output
-    let output = outputs[0].try_extract_tensor::<f32>()?;
-    println!("Predictions: {:?}", output);
+    let app = Router::new()
+        .route("/predict", post(predict))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
+    tracing::info!("ML Server running on http://127.0.0.1:3000");
+
+    axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+
+async fn predict(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<PredictionRequest>,
+) -> Result<Json<PredctionResponse>, ModelError> {
+    if request.features.is_empty() {
+        return Err(ModelError::InputError("No features provided".to_string()));
+    }
+
+    let n_samples = request.features.len();
+    let n_features = request.features[0].len();
+
+    if n_features != 4 {
+        return Err(ModelError::InputError(
+            "Each sample must have exactly 4 features".to_string()
+        ));
+    }
+
+    let flat_features: Vec<f32> = request.features.iter()
+        .flat_map(|v| v.iter().copied())
+        .collect();
+
+    let input_array = Array2::from_shape_vec(
+        (n_samples, n_features), flat_features
+        ).map_err(|e| ModelError::InputError(e.to_string()))?;
+
+    let outputs = state.session
+        .run(ort::inputs![&state.input_name => input_array]?)?;
+
+    let output = outputs[0]
+        .try_extract_tensor::<f32>()
+        .map_err(|e| ModelError::PredictionError(e.to_string()))?;
+
+    let predictions = output.view().iter().copied().collect();
+    
+    Ok(Json(PredctionResponse { predictions }))
 }
