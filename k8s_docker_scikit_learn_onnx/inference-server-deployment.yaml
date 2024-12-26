@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: inference-server
+  template:
+    metadata:
+      labels:
+        app: inference-server
+    spec:
+      containers:
+        - name: inference-server
+          image: ghcr.io/martin-conur/scikit-onnx:0.0.1
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "256Mi"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+          ports:
+            - containerPort: 3000 
+      imagePullSecrets:
+        - name: ghcr-secret

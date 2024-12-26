@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"v1","kind":"Service","metadata":{"annotations":{},"name":"inference-server-service","namespace":"default"},"spec":{"ports":[{"port":3000,"protocol":"TCP","targetPort":3000}],"selector":{"app":"inference-server"},"type":"NodePort"}}
+  creationTimestamp: "2024-12-24T15:31:39Z"
+  name: inference-server-service
+  namespace: default
+  resourceVersion: "2499"
+  uid: 5d51cefe-e053-44be-89d6-4a6cb1afd358
+spec:
+  clusterIP: 10.109.169.81
+  clusterIPs:
+  - 10.109.169.81
+  externalTrafficPolicy: Local
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - nodePort: 32177
+    port: 3000
+    protocol: TCP
+    targetPort: 3000
+  selector:
+    app: inference-server
+  sessionAffinity: None
+  type: NodePort
+status:
+  loadBalancer: {}
